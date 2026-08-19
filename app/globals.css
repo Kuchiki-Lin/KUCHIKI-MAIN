@@ -1,0 +1,205 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+
+
+
+
+:root {
+  --foreground-rgb: 0, 0, 0;
+  --background-start-rgb: 39, 169, 37;
+  --background-end-rgb: 77, 154, 80;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --foreground-rgb: 255, 255, 255;
+    --background-start-rgb: 0, 0, 0;
+    --background-end-rgb: 0, 0, 0;
+  }
+}
+
+html {
+  zoom: 80%; /* Sets the zoom level to 80% */
+  line-height: 40px;
+}
+
+@keyframes soft-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 25px 6px rgba(37, 99, 235, 0.5);
+  }
+}
+
+.animate-soft-pulse {
+  animation: soft-pulse 2s infinite;
+}
+
+
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
+.hidden { display: none; }
+
+
+/* Dark mode styles */
+.dark {
+  background-color: #111; /* Dark background */
+  color: #fff; /* Light text */
+}
+
+/* Dark mode for specific elements */
+.dark textarea,
+.dark input,
+.dark select {
+  background-color: #222;
+  color: white;
+  border-color: #444;
+}
+
+.dark button {
+  background-color: #333;
+  color: white;
+  border: 1px solid #555;
+}
+
+.dark button:hover {
+  background-color: #444;
+}
+
+.battle-container {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+
+.card-section {
+  width: 20%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.card {
+  width: 100px;
+  height: 150px;
+  margin: 10px;
+  padding: 10px;
+  background-color: white;
+  border-radius: 10px;
+  text-align: center;
+  cursor: pointer;
+  transition: transform 0.3s ease-in-out;
+}
+
+.card.selected {
+  transform: scale(1.1);
+  border: 3px solid gold;
+}
+
+.effect-board {
+  width: 100%;
+  padding: 10px;
+  text-align: center;
+  background-color: #333;
+  color: white;
+  border-radius: 5px;
+}
+.previewdark{
+  background-color: rgb(159, 127, 127)
+}
+
+  /* globals.css or a module CSS file */
+.custom-title {
+  font-size: 2.875rem !important;
+  font-weight: 600;
+}
+
+/* Hide scrollbars */
+.scroll-hide::-webkit-scrollbar {
+  display: none;
+}
+.scroll-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* parchment fade edges */
+.scroll-fade::before,
+.scroll-fade::after {
+  content: "";
+  position: sticky;
+  left: 0;
+  right: 0;
+  height: 60px;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.scroll-fade::before {
+  top: 0;
+  background: linear-gradient(to bottom, rgba(255,240,200,0.9), transparent);
+}
+
+.scroll-fade::after {
+  bottom: 0;
+  background: linear-gradient(to top, rgba(255,240,200,0.9), transparent);
+}
+
+/* crown glow */
+@keyframes crownGlow {
+  0% { filter: drop-shadow(0 0 2px gold); }
+  50% { filter: drop-shadow(0 0 12px gold); }
+  100% { filter: drop-shadow(0 0 2px gold); }
+}
+
+.crown-glow {
+  animation: crownGlow 2s infinite;
+}
+
+/* ink writing effect */
+@keyframes inkReveal {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0px);
+  }
+}
+
+.ink-reveal {
+  animation: inkReveal 0.6s ease forwards;
+}
+
+
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

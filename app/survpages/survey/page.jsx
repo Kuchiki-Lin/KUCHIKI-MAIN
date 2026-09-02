@@ -17,13 +17,23 @@ import {
 import toast from "react-hot-toast";
 import AutoMarkButton from "@/app/Modules/automark";
 import { toast as custom } from "react-hot-toast";
-import { Switch, Input, Button, Modal, message } from "antd";
+import { Switch, Input, Button, Modal } from "antd";
 import Checkbox from "antd/es/checkbox";
 
 const { TextArea } = Input;
 
 const Survey = () => {
   const router = useRouter();
+
+  function createQuestionId() {
+    if (typeof crypto !== "undefined" && crypto.randomUUID) {
+      return String(crypto.randomUUID());
+    }
+
+    return String(
+      `question-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+    );
+  }
 
   const createEmptySection = () => ({
     id: Date.now() + Math.random(),
@@ -44,9 +54,11 @@ const Survey = () => {
 
   const [activeSectionId, setActiveSectionId] = useState(null);
 
+  const normalizeQuestionId = (value) => String(value ?? "");
+
   const [components, setComponents] = useState([
     {
-      id: 0,
+      id: createQuestionId(),
       text: "",
       showMultipleChoice: false,
       openAnswer: false,
@@ -83,6 +95,7 @@ const Survey = () => {
 
   const searchParams = useSearchParams();
   const surveyId = searchParams.get("surveyId");
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
 
   const [selectedSurvey, setSelectedSurvey] = useState(null);
   const [surveyUrl, setSurveyUrl] = useState("");
@@ -142,6 +155,8 @@ const Survey = () => {
 
   const [emailInput, setEmailInput] = useState("");
   const [emailList, setEmailList] = useState([]);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [questionToDelete, setQuestionToDelete] = useState(null);
 
   const getCheckboxLabel = (index, type = "numbers") => {
     if (type === "letters") {
@@ -604,9 +619,11 @@ const Survey = () => {
   };
 
   const updateComponent = (id, updates) => {
+    const targetId = normalizeQuestionId(id);
+
     setComponents((prev) =>
       prev.map((component) => {
-        if (component.id === id) {
+        if (normalizeQuestionId(component.id) === targetId) {
           const newState =
             typeof updates === "function" ? updates(component) : updates;
           return { ...component, ...newState };
@@ -622,13 +639,10 @@ const Survey = () => {
     subsectionId = null,
   ) => {
     const targetSectionId = sectionId || sections[0]?.id || null;
-    const maxId = components.reduce(
-      (max, component) => Math.max(max, component.id),
-      0,
-    );
 
     const newComponent = {
-      id: maxId + 1,
+      id: createQuestionId(),
+
       text: "",
       showMultipleChoice: false,
       openAnswer,
@@ -640,14 +654,105 @@ const Survey = () => {
       otherOption: false,
       ratingMode: false,
       checkboxLabelType: "numbers",
+
       sectionId: targetSectionId,
       subsectionId,
     };
+
     setComponents((prev) => [...prev, newComponent]);
   };
 
-  const removeComponent = (id) => {
-    setComponents((prev) => prev.filter((component) => component.id !== id));
+  const removeComponent = async (questionId) => {
+    const idToDelete = normalizeQuestionId(questionId);
+
+    if (!idToDelete) {
+      toast.error("Cannot delete question: missing question ID.");
+      return false;
+    }
+
+    const targetIndex = components.findIndex(
+      (component) => normalizeQuestionId(component.id) === idToDelete,
+    );
+
+    if (targetIndex === -1) {
+      console.error("Question not found:", idToDelete);
+
+      toast.error("The selected question could not be found.");
+      return false;
+    }
+
+    const targetComponent = components[targetIndex];
+
+    console.log("===== DELETE QUESTION =====");
+    console.log("Deleting ID:", idToDelete);
+    console.log("Deleting question:", targetComponent.text);
+    console.log("Deleting section:", targetComponent.sectionId);
+
+    /*
+     * Build the new array BEFORE changing React state.
+     * This guarantees Firebase receives the exact array
+     * we intend to keep.
+     */
+    const nextComponents = components.filter(
+      (component) => normalizeQuestionId(component.id) !== idToDelete,
+    );
+
+    try {
+      if (selectedSurvey?.id || surveyId) {
+        await persistSurveyState(nextComponents, {
+          silent: true,
+          surveyDocumentId: selectedSurvey?.id || surveyId,
+        });
+
+        /*
+         * Verify that THIS exact question ID no longer
+         * exists in Firebase.
+         */
+        const verifyRef = doc(
+          db,
+          "surveys",
+          normalizeQuestionId(selectedSurvey?.id || surveyId),
+        );
+
+        const verifySnap = await getDoc(verifyRef);
+
+        if (!verifySnap.exists()) {
+          throw new Error("Survey disappeared while verifying deletion.");
+        }
+
+        const firebaseQuestions = Array.isArray(verifySnap.data().questions)
+          ? verifySnap.data().questions
+          : [];
+
+        const stillExists = firebaseQuestions.some(
+          (question) => normalizeQuestionId(question.id) === idToDelete,
+        );
+
+        if (stillExists) {
+          throw new Error("The deleted question still exists in Firebase.");
+        }
+      }
+
+      /*
+       * Only update the UI AFTER Firebase confirms
+       * the deletion.
+       */
+      setComponents(nextComponents);
+
+      setHasUnsavedChanges(false);
+
+      toast.success("Question deleted.");
+
+      console.log("Successfully deleted question:", idToDelete);
+
+      return true;
+    } catch (error) {
+      console.error("QUESTION DELETE FAILED:", error);
+
+      toast.error("Question was not deleted from Firebase.");
+
+      return false;
+    }
   };
 
   useEffect(() => {
@@ -659,7 +764,6 @@ const Survey = () => {
     }
 
     const firstSectionId = sections[0].id;
-
     // Set activeSectionId to first section if not set or invalid
     if (
       !activeSectionId ||
@@ -698,73 +802,39 @@ const Survey = () => {
     });
   };
 
-  // compile preview (includes numbering flag and subquestions)
-  const compilePreviewData = (e) => {
-    e.preventDefault();
-    const compiled = components.map((component) => ({
-      question: component.text,
-      sectionId:
-        component.sectionId || activeSectionId || sections[0]?.id || null,
-      subsectionId: component.subsectionId || null,
-      answerType: component.checkboxes
-        ? "Checkboxes"
-        : component.showMultipleChoice
-          ? "Multiple Choice"
-          : component.booleans
-            ? "Boolean"
-            : "Open Answer",
-      choices:
-        component.showMultipleChoice || component.checkboxes
-          ? component.choices
-          : null,
-      ratingMode: component.ratingMode,
-      checkboxLabelType: component.checkboxLabelType || "numbers",
-      correctAnswer:
-        component.showMultipleChoice ||
-        component.booleans ||
-        component.checkboxes
-          ? component.correctAnswer || null
-          : null,
-      subQuestion: component.subQuestion
-        ? {
-            question: component.subQuestion.text,
-            answerType: component.subQuestion.checkboxes
-              ? "Checkboxes"
-              : component.subQuestion.showMultipleChoice
-                ? "Multiple Choice"
-                : component.subQuestion.booleans
-                  ? "Boolean"
-                  : "Open Answer",
-            choices:
-              component.subQuestion.showMultipleChoice ||
-              component.subQuestion.checkboxes
-                ? component.subQuestion.choices
-                : null,
-            ratingMode: component.subQuestion.ratingMode,
-            checkboxLabelType:
-              component.subQuestion.checkboxLabelType || "numbers",
-            correctAnswer:
-              component.subQuestion.showMultipleChoice ||
-              component.subQuestion.booleans ||
-              component.subQuestion.checkboxes
-                ? component.subQuestion.correctAnswer || null
-                : null,
-          }
-        : null,
-    }));
-    setPreviewData(compiled);
+  const buildPersistedSections = (
+    sourceSections = sections,
+    sourceComponents = components,
+  ) => {
+    return sourceSections.filter((section) => {
+      const hasQuestions = sourceComponents.some(
+        (component) =>
+          normalizeQuestionId(component.sectionId) ===
+          normalizeQuestionId(section.id),
+      );
+
+      const hasContent =
+        Boolean(section.title?.trim()) ||
+        Boolean(section.objective?.trim()) ||
+        Boolean(section.note?.trim()) ||
+        Boolean(section.showNote) ||
+        Boolean(section.subsections?.length);
+
+      return hasQuestions || hasContent;
+    });
   };
 
-  // save to db
-  const saveToDataBase = async (e) => {
-    e.preventDefault();
-    setIsSaving(true);
+  const buildCompiledQuestions = (sourceComponents = components) => {
+    return sourceComponents.map((component) => ({
+      id: normalizeQuestionId(component.id),
 
-    const compiled = components.map((component) => ({
-      question: component.text,
+      question: component.text || "",
+
       sectionId:
         component.sectionId || activeSectionId || sections[0]?.id || null,
+
       subsectionId: component.subsectionId || null,
+
       answerType: component.checkboxes
         ? "Checkboxes"
         : component.showMultipleChoice
@@ -772,12 +842,16 @@ const Survey = () => {
           : component.booleans
             ? "Boolean"
             : "Open Answer",
+
       choices:
         component.showMultipleChoice || component.checkboxes
           ? component.choices
           : null,
-      ratingMode: component.ratingMode,
+
+      ratingMode: Boolean(component.ratingMode),
+
       checkboxLabelType: component.checkboxLabelType || "numbers",
+
       correctAnswer:
         component.showMultipleChoice ||
         component.booleans ||
@@ -787,9 +861,14 @@ const Survey = () => {
             : null
           : null,
 
+      otherOption: Boolean(component.otherOption),
+
+      otherValue: component.otherValue || "",
+
       subQuestion: component.subQuestion
         ? {
-            question: component.subQuestion.text,
+            question: component.subQuestion.text || "",
+
             answerType: component.subQuestion.checkboxes
               ? "Checkboxes"
               : component.subQuestion.showMultipleChoice
@@ -797,14 +876,18 @@ const Survey = () => {
                 : component.subQuestion.booleans
                   ? "Boolean"
                   : "Open Answer",
+
             choices:
               component.subQuestion.showMultipleChoice ||
               component.subQuestion.checkboxes
                 ? component.subQuestion.choices
                 : null,
-            ratingMode: component.subQuestion.ratingMode,
+
+            ratingMode: Boolean(component.subQuestion.ratingMode),
+
             checkboxLabelType:
               component.subQuestion.checkboxLabelType || "numbers",
+
             correctAnswer:
               component.subQuestion.showMultipleChoice ||
               component.subQuestion.booleans ||
@@ -813,9 +896,146 @@ const Survey = () => {
                   ? component.subQuestion.correctAnswer
                   : null
                 : null,
+
+            otherOption: Boolean(component.subQuestion.otherOption),
+
+            otherValue: component.subQuestion.otherValue || "",
           }
         : null,
     }));
+  };
+
+  const persistSurveyState = async (sourceComponents, options = {}) => {
+    const {
+      silent = false,
+      successMessage = "Survey saved successfully.",
+      surveyDocumentId = selectedSurvey?.id || surveyId,
+    } = options;
+
+    const normalizedSurveyId = normalizeQuestionId(surveyDocumentId);
+
+    if (!normalizedSurveyId) {
+      throw new Error("Cannot save survey: missing Firebase survey ID.");
+    }
+
+    const compiled = buildCompiledQuestions(sourceComponents);
+
+    const persistedSections = buildPersistedSections(
+      sections,
+      sourceComponents,
+    );
+
+    const payload = normalizeSurveyPayload({
+      title: title || editableTitle,
+      expectedResponses,
+      userId: user?.uid,
+      country,
+      state,
+      anonymous,
+      autoMark,
+      numberedQuestions,
+      approved: false,
+
+      // THIS IS THE EXACT CURRENT QUESTION ARRAY
+      questions: compiled,
+
+      objectives: surveyData?.objectives || {
+        main: "",
+        secondary: "",
+        specific: [],
+      },
+
+      sections: persistedSections,
+
+      // Preserve original createdAt when editing
+      createdAt: selectedSurvey?.createdAt || new Date().toISOString(),
+    });
+
+    const docRef = doc(db, "surveys", normalizedSurveyId);
+
+    console.log("===== FIREBASE SURVEY WRITE =====");
+    console.log("Survey ID:", normalizedSurveyId);
+    console.log("Questions being written:", compiled);
+    console.log("Question count:", compiled.length);
+    console.log("Sections being written:", persistedSections);
+
+    /*
+     * IMPORTANT:
+     * merge:false means the existing survey document is
+     * replaced with this exact survey state.
+     *
+     * Therefore an old question that is absent from
+     * `compiled` cannot remain in `questions`.
+     */
+    await setDoc(
+      docRef,
+      {
+        ...payload,
+        questions: compiled,
+      },
+      {
+        merge: false,
+      },
+    );
+
+    // Verify immediately against Firebase.
+    const verificationSnap = await getDoc(docRef);
+
+    if (!verificationSnap.exists()) {
+      throw new Error(
+        "Firebase survey document could not be read after saving.",
+      );
+    }
+
+    const firebaseData = verificationSnap.data();
+
+    const firebaseQuestions = Array.isArray(firebaseData.questions)
+      ? firebaseData.questions
+      : [];
+
+    console.log("Firebase questions AFTER WRITE:", firebaseQuestions);
+
+    if (firebaseQuestions.length !== compiled.length) {
+      throw new Error(
+        `Firebase verification failed. Expected ${compiled.length} questions but found ${firebaseQuestions.length}.`,
+      );
+    }
+
+    setSelectedSurvey((prev) =>
+      prev
+        ? {
+            ...prev,
+            ...payload,
+            id: normalizedSurveyId,
+            questions: compiled,
+          }
+        : {
+            id: normalizedSurveyId,
+            ...payload,
+            questions: compiled,
+          },
+    );
+
+    setHasUnsavedChanges(false);
+
+    if (!silent) {
+      toast.success(successMessage);
+    }
+
+    return compiled;
+  };
+
+  // compile preview (includes numbering flag and subquestions)
+  const compilePreviewData = (e) => {
+    e.preventDefault();
+    const compiled = buildCompiledQuestions();
+    setPreviewData(compiled);
+  };
+
+  const saveToDataBase = async (e) => {
+    e.preventDefault();
+    setIsSaving(true);
+    const compiled = buildCompiledQuestions();
 
     if (autoMark) {
       const hasInvalid = compiled.some((q) => {
@@ -894,27 +1114,51 @@ const Survey = () => {
                 <button
                   onClick={async () => {
                     toast.dismiss(t.id);
+
                     if (!selectedSurvey?.id) {
                       toast.error("No valid survey selected for overwrite");
                       return;
                     }
-                    const cleanedPayload = Object.fromEntries(
-                      Object.entries(payload).filter(
-                        ([_, v]) => v !== undefined,
-                      ),
-                    );
 
-                    const docRef = doc(
-                      db,
-                      "surveys",
-                      selectedSurvey.id.toString(),
-                    );
-                    await setDoc(docRef, cleanedPayload, { merge: true });
-                    toast.success("Survey updated successfully!");
+                    try {
+                      const cleanedPayload = Object.fromEntries(
+                        Object.entries(payload).filter(
+                          ([_, value]) => value !== undefined,
+                        ),
+                      );
 
-                    setTimeout(() => {
-                      window.location.reload();
-                    }, 1000);
+                      const docRef = doc(
+                        db,
+                        "surveys",
+                        String(selectedSurvey.id),
+                      );
+
+                      console.log("=================================");
+                      console.log("UPDATING SURVEY");
+                      console.log("Survey ID:", selectedSurvey.id);
+                      console.log("Questions:", cleanedPayload.questions);
+                      console.log(
+                        "Question count:",
+                        cleanedPayload.questions?.length,
+                      );
+                      console.log("=================================");
+
+                      await setDoc(docRef, {
+                        ...cleanedPayload,
+                        questions: cleanedPayload.questions,
+                      });
+
+                      setHasUnsavedChanges(false);
+
+                      toast.success("Survey updated successfully!");
+
+                      setTimeout(() => {
+                        window.location.reload();
+                      }, 1000);
+                    } catch (error) {
+                      console.error("FIREBASE UPDATE FAILED:", error);
+                      toast.error("Failed to update survey.");
+                    }
                   }}
                   className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
                 >
@@ -984,7 +1228,7 @@ const Survey = () => {
     }
   };
 
-  // When loading existing survey, transform to components (including numberedQuestions + subQuestion)
+  //When loading existing survey, transform to components (including numberedQuestions + subQuestion)
   const handleSurveySelection = async (surveyIdParam) => {
     if (!surveyIdParam) return;
 
@@ -1004,80 +1248,178 @@ const Survey = () => {
         ? survey.questions
         : [];
 
-      const transformedComponents = surveyQuestions.map((q, index) => ({
-        ...(() => {
-          const isLegacyRating =
-            q.answerType === "Checkboxes" &&
-            Array.isArray(q.choices) &&
-            q.choices.length === 5 &&
-            q.choices.every(
-              (choice, choiceIndex) =>
-                String(choice) === String(choiceIndex + 1),
-            );
-          return {
-            ratingMode: Boolean(q.ratingMode || isLegacyRating),
-            checkboxLabelType: q.checkboxLabelType || "numbers",
-          };
-        })(),
-        id: index,
-        text: q.question || "",
-        showMultipleChoice: q.answerType === "Multiple Choice",
-        openAnswer: q.answerType === "Open Answer",
-        choices:
-          Array.isArray(q.choices) && q.choices.length ? q.choices : [""],
-        booleans: q.answerType === "Boolean",
-        checkboxes: q.answerType === "Checkboxes",
-        correctAnswer:
-          q.correctAnswer !== undefined && q.correctAnswer !== null
-            ? q.correctAnswer
-            : null,
-        sectionId:
-          q.sectionId ||
-          (normalizedSections[index % normalizedSections.length]?.id ??
-            firstSectionId),
-        subsectionId: q.subsectionId || null,
-        subQuestion: q.subQuestion
-          ? {
-              ...(() => {
-                const subChoices = q.subQuestion.choices;
-                const isLegacyRating =
-                  q.subQuestion.answerType === "Checkboxes" &&
-                  Array.isArray(subChoices) &&
+      const usedQuestionIds = new Set();
+
+      // Create a map of normalized section IDs to actual section IDs
+      const sectionIdMap = new Map();
+      normalizedSections.forEach((section) => {
+        sectionIdMap.set(normalizeQuestionId(section.id), section.id);
+      });
+
+      const transformedComponents = surveyQuestions.map((q) => {
+        /*
+         * ---------------------------------------------------------
+         * QUESTION ID
+         * ---------------------------------------------------------
+         * Preserve a valid existing ID.
+         * Generate a new ID only when:
+         *   - the old question has no ID, or
+         *   - the old ID is duplicated.
+         *
+         * This ID is the question's permanent identity and must
+         * never depend on its array position.
+         */
+        let questionId = normalizeQuestionId(q.id);
+
+        if (!questionId || usedQuestionIds.has(questionId)) {
+          questionId = createQuestionId();
+        }
+
+        usedQuestionIds.add(questionId);
+
+        /*
+         * ---------------------------------------------------------
+         * SECTION ID
+         * ---------------------------------------------------------
+         * Preserve the saved section when it still exists.
+         * Otherwise move the question to the first valid section.
+         * Always use the actual section ID from normalizedSections,
+         * not a stringified version.
+         */
+        const savedSectionId = normalizeQuestionId(q.sectionId);
+        const mappedSectionId = sectionIdMap.get(savedSectionId);
+
+        const resolvedSectionId =
+          mappedSectionId !== undefined ? mappedSectionId : firstSectionId;
+
+        /*
+         * ---------------------------------------------------------
+         * MAIN QUESTION RATING DETECTION
+         * ---------------------------------------------------------
+         */
+        const isLegacyRating =
+          q.answerType === "Checkboxes" &&
+          Array.isArray(q.choices) &&
+          q.choices.length === 5 &&
+          q.choices.every(
+            (choice, choiceIndex) => String(choice) === String(choiceIndex + 1),
+          );
+
+        /*
+         * ---------------------------------------------------------
+         * MAIN QUESTION
+         * ---------------------------------------------------------
+         */
+        return {
+          id: questionId,
+
+          text: q.question || "",
+
+          showMultipleChoice: q.answerType === "Multiple Choice",
+
+          openAnswer: q.answerType === "Open Answer",
+
+          booleans: q.answerType === "Boolean",
+
+          checkboxes: q.answerType === "Checkboxes",
+
+          choices:
+            Array.isArray(q.choices) && q.choices.length > 0
+              ? [...q.choices]
+              : [""],
+
+          ratingMode: Boolean(q.ratingMode || isLegacyRating),
+
+          checkboxLabelType: q.checkboxLabelType || "numbers",
+
+          otherOption: Boolean(q.otherOption),
+
+          otherValue: q.otherValue || "",
+
+          correctAnswer:
+            q.correctAnswer !== undefined && q.correctAnswer !== null
+              ? q.correctAnswer
+              : null,
+
+          sectionId: resolvedSectionId,
+
+          /*
+           * Keep subsection relationship only if one was actually
+           * saved. The subsection itself belongs to the section.
+           */
+          subsectionId: q.subsectionId || null,
+
+          /*
+           * -------------------------------------------------------
+           * SUB-QUESTION
+           * -------------------------------------------------------
+           */
+          subQuestion: q.subQuestion
+            ? (() => {
+                const sub = q.subQuestion;
+
+                const subChoices =
+                  Array.isArray(sub.choices) && sub.choices.length > 0
+                    ? [...sub.choices]
+                    : [""];
+
+                const isLegacySubRating =
+                  sub.answerType === "Checkboxes" &&
                   subChoices.length === 5 &&
                   subChoices.every(
                     (choice, choiceIndex) =>
                       String(choice) === String(choiceIndex + 1),
                   );
-                return {
-                  ratingMode: Boolean(
-                    q.subQuestion.ratingMode || isLegacyRating,
-                  ),
-                  checkboxLabelType:
-                    q.subQuestion.checkboxLabelType || "numbers",
-                };
-              })(),
-              text: q.subQuestion.question || "",
-              showMultipleChoice:
-                q.subQuestion.answerType === "Multiple Choice",
-              openAnswer: q.subQuestion.answerType === "Open Answer",
-              choices:
-                Array.isArray(q.subQuestion.choices) &&
-                q.subQuestion.choices.length
-                  ? q.subQuestion.choices
-                  : [""],
-              booleans: q.subQuestion.answerType === "Boolean",
-              checkboxes: q.subQuestion.answerType === "Checkboxes",
-              correctAnswer: q.subQuestion.correctAnswer || null,
-            }
-          : null,
-      }));
 
+                return {
+                  text: sub.question || "",
+
+                  showMultipleChoice: sub.answerType === "Multiple Choice",
+
+                  openAnswer: sub.answerType === "Open Answer",
+
+                  booleans: sub.answerType === "Boolean",
+
+                  checkboxes: sub.answerType === "Checkboxes",
+
+                  choices: subChoices,
+
+                  ratingMode: Boolean(sub.ratingMode || isLegacySubRating),
+
+                  checkboxLabelType: sub.checkboxLabelType || "numbers",
+
+                  otherOption: Boolean(sub.otherOption),
+
+                  otherValue: sub.otherValue || "",
+
+                  correctAnswer:
+                    sub.correctAnswer !== undefined &&
+                    sub.correctAnswer !== null
+                      ? sub.correctAnswer
+                      : null,
+                };
+              })()
+            : null,
+        };
+      });
+
+      /*
+       * ---------------------------------------------------------
+       * SET COMPONENTS
+       * ---------------------------------------------------------
+       *
+       * If Firebase has questions, load exactly those questions.
+       * Do not create an additional question.
+       *
+       * Only create the empty question when the survey truly has
+       * zero questions.
+       */
       setComponents(
-        transformedComponents.length
+        transformedComponents.length > 0
           ? transformedComponents
           : [
               {
-                id: 0,
+                id: createQuestionId(),
                 text: "",
                 showMultipleChoice: false,
                 openAnswer: false,
@@ -1086,25 +1428,55 @@ const Survey = () => {
                 correctAnswer: null,
                 subQuestion: null,
                 checkboxes: false,
+                otherOption: false,
+                ratingMode: false,
+                checkboxLabelType: "numbers",
                 sectionId: firstSectionId,
+                subsectionId: null,
               },
             ],
       );
 
+      /*
+       * ---------------------------------------------------------
+       * SET SURVEY/SECTION STATE
+       * ---------------------------------------------------------
+       */
       setSections(normalizedSections);
       setActiveSectionId(firstSectionId);
+
       setSurveyData((prev) => ({
         ...prev,
         title: survey.title || prev.title || "",
         expectedResponses:
           survey.expectedResponses ?? prev.expectedResponses ?? 0,
         objectives: survey.objectives ||
-          prev.objectives || { main: "", secondary: "", specific: [] },
+          prev.objectives || {
+            main: "",
+            secondary: "",
+            specific: [],
+          },
         sections: normalizedSections,
       }));
+
       setAutoMark(Boolean(survey.autoMark));
       setNumberedQuestions(Boolean(survey.numberedQuestions));
+
+      /*
+       * This survey is now synchronized with Firebase.
+       */
+      setHasUnsavedChanges(false);
+
       setShowSurveySelection(false);
+
+      console.log("Loaded survey from Firebase:", {
+        surveyId: surveyIdParam,
+        title: survey.title,
+        questionCount: surveyQuestions.length,
+        questions: surveyQuestions,
+        sections: normalizedSections,
+        transformedComponents,
+      });
     }
   };
 
@@ -1151,22 +1523,25 @@ const Survey = () => {
     }
   }, [surveyData, router]);
 
-  // ----- Rendering -----
+  // ----- Rendering -----//
   const getQuestionNumber = (section, sectionIdx, questionIdx) => {
-    if (!numberedQuestions || section.numberingMode === "blank") return "";
-    if (section.numberingMode === "renumber") return `${questionIdx + 1}.`;
-
-    const previousQuestionCount = sections
-      .slice(0, sectionIdx)
-      .filter((item) => item.numberingMode !== "blank")
-      .reduce(
-        (count, item) =>
-          count +
-          components.filter((component) => component.sectionId === item.id)
-            .length,
-        0,
-      );
-
+    if (!numberedQuestions || section.numberingMode === "blank") {
+      return "";
+    }
+    // Renumber from 1 inside this section
+    if (section.numberingMode === "renumber") {
+      return `${questionIdx + 1}.`;
+    }
+    // Continue numbering from previous non-blank sections
+    let previousQuestionCount = 0;
+    sections.slice(0, sectionIdx).forEach((previousSection) => {
+      if (previousSection.numberingMode === "blank") {
+        return;
+      }
+      previousQuestionCount += components.filter(
+        (component) => component.sectionId === previousSection.id,
+      ).length;
+    });
     return `${previousQuestionCount + questionIdx + 1}.`;
   };
 
@@ -1502,9 +1877,7 @@ const Survey = () => {
                   {/* Questions in this section */}
                   <div className="space-y-6">
                     {sectionQuestions.map((component, index) => (
-                      <React.Fragment
-                        key={`component-${component.id || index}`}
-                      >
+                      <React.Fragment key={`component-${component.id}`}>
                         {component.subsectionId &&
                           section.subsections.find(
                             (subsection) =>
@@ -1537,8 +1910,7 @@ const Survey = () => {
                             </div>
                           )}
                         <div
-                          key={`component-${component.id || index}`}
-                          id={`component-${component.id || index}`}
+                          id={`component-${component.id}`}
                           className="border-4 border-black p-4 rounded-lg text-black "
                         >
                           {/* Show numbering live */}
@@ -1618,19 +1990,9 @@ const Survey = () => {
                                   title="Delete Question"
                                   onClick={(e) => {
                                     e.preventDefault();
-                                    Modal.confirm({
-                                      title: "Delete this question?",
-                                      content:
-                                        "This will permanently remove the question and any linked sub-questions.",
-                                      okText: "Yes, Delete",
-                                      okType: "danger",
-                                      cancelText: "Cancel",
-                                      centered: true,
-                                      onOk() {
-                                        removeComponent(component.id);
-                                        message.success("Question deleted");
-                                      },
-                                    });
+
+                                    setQuestionToDelete(component.id);
+                                    setShowDeleteConfirm(true);
                                   }}
                                   className="ml-auto"
                                 >
@@ -2770,6 +3132,77 @@ const Survey = () => {
             </button>
           </div>
         )}
+        {showDeleteConfirm &&
+          questionToDelete &&
+          (() => {
+            const questionToDeleteData = components.find(
+              (component) =>
+                normalizeQuestionId(component.id) ===
+                normalizeQuestionId(questionToDelete),
+            );
+
+            return (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+                <div className="w-[90%] max-w-md rounded-xl bg-white p-6 shadow-2xl">
+                  <h2 className="mb-3 text-lg font-semibold text-gray-900">
+                    Delete Question?
+                  </h2>
+
+                  <p className="mb-2 text-sm text-gray-500">
+                    Are you sure you want to delete this question?
+                  </p>
+
+                  <div className="mb-5 rounded-lg border border-gray-300 bg-gray-50 p-3">
+                    <p className="text-sm font-medium text-gray-800">
+                      {questionToDeleteData?.text?.trim()
+                        ? questionToDeleteData.text
+                        : "Untitled question"}
+                    </p>
+                  </div>
+
+                  <p className="mb-5 text-xs text-red-600">
+                    This will also remove any linked sub-question.
+                  </p>
+
+                  <div className="flex justify-end gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowDeleteConfirm(false);
+                        setQuestionToDelete(null);
+                      }}
+                      className="rounded-lg border border-gray-300 px-4 py-2 text-sm hover:bg-gray-100"
+                    >
+                      Cancel
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const idToDelete =
+                          normalizeQuestionId(questionToDelete);
+
+                        setShowDeleteConfirm(false);
+                        setQuestionToDelete(null);
+
+                        const deleted = await removeComponent(idToDelete);
+
+                        if (!deleted) {
+                          console.error(
+                            "Deletion failed for question:",
+                            idToDelete,
+                          );
+                        }
+                      }}
+                      className="rounded-lg bg-red-600 px-4 py-2 text-sm text-white hover:bg-red-700"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
       </div>
     </PrivateRoute>
   );

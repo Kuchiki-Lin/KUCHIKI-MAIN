@@ -69,19 +69,30 @@ export default function ResponsePage() {
   }, [surveyId]);
 
   useEffect(() => {
-    if (survey && userLocation) {
-      const matchesCountry =
-        survey.country?.toLowerCase() ===
-        userLocation.country_name?.toLowerCase();
+    if (!survey || !userLocation) return;
 
-      const matchesState = survey.state
-        ? survey.state?.toLowerCase() === userLocation.city?.toLowerCase()
-        : true;
+    // Normalize values so null, undefined, and empty strings
+    // can be handled consistently.
+    const surveyCountry = survey.country?.trim().toLowerCase() || "";
+    const surveyState = survey.state?.trim().toLowerCase() || "";
 
-      if (!matchesCountry || !matchesState) {
-        setAccessDenied(true);
-      }
-    }
+    const userCountry = userLocation.country_name?.trim().toLowerCase() || "";
+
+    const userState = userLocation.city?.trim().toLowerCase() || "";
+
+    // If country is specified, it MUST match.
+    // If country is empty/null, there is no country restriction.
+    const countryAllowed =
+      surveyCountry === "" || surveyCountry === userCountry;
+
+    // If state is specified, it MUST match.
+    // If state is empty/null, there is no state restriction.
+    const stateAllowed = surveyState === "" || surveyState === userState;
+
+    // Survey is allowed only when ALL specified restrictions pass.
+    const allowed = countryAllowed && stateAllowed;
+
+    setAccessDenied(!allowed);
   }, [survey, userLocation]);
 
   useEffect(() => {
@@ -324,12 +335,12 @@ export default function ResponsePage() {
       const isSub = parentLabel !== "";
       const questionLabel = isSub
         ? String.fromCharCode(97 + index)
-        : `${index + 1}`;
+        : getQuestionNumber(q).replace(".", "") || `${index + 1}`;
       const questionKey = isSub
         ? `${parentLabel}${questionLabel}. ${q.question}`
         : `${questionLabel}. ${q.question}`;
 
-      const answer = responses[questionKey] || "";
+      const answer = responses[questionKey] ?? "";
       const subResponse = q.subQuestion
         ? buildStructuredResponse(
             [q.subQuestion],
@@ -349,27 +360,22 @@ export default function ResponsePage() {
       ? pages[currentPage] || []
       : survey?.questions || [];
 
+  const groupedQuestions = pageQuestions.reduce((groups, question) => {
+    const sectionId = String(question.sectionId || "unsectioned");
 
-const groupedQuestions = pageQuestions.reduce((groups, question) => {
-  const sectionId = String(question.sectionId || "unsectioned");
+    if (!groups[sectionId]) {
+      const section = survey?.sections?.find((s) => String(s.id) === sectionId);
 
-  if (!groups[sectionId]) {
-    const section = survey?.sections?.find(
-      (s) => String(s.id) === sectionId
-    );
+      groups[sectionId] = {
+        section,
+        questions: [],
+      };
+    }
 
-    groups[sectionId] = {
-      section,
-      questions: [],
-    };
-  }
+    groups[sectionId].questions.push(question);
 
-  groups[sectionId].questions.push(question);
-
-  return groups;
-}, {});
-
-
+    return groups;
+  }, {});
 
   const getSectionForQuestion = (question) =>
     question
@@ -387,71 +393,66 @@ const groupedQuestions = pageQuestions.reduce((groups, question) => {
       : undefined;
 
   const renderQuestionContext = (question, index) => {
-  const section = getSectionForQuestion(question);
-  const subsection = getSubsectionForQuestion(question, section);
+    const section = getSectionForQuestion(question);
+    const subsection = getSubsectionForQuestion(question, section);
 
-  const previousQuestion = pageQuestions[index - 1];
+    const previousQuestion = pageQuestions[index - 1];
 
-  // IDs of current question
-  const currentSectionId = question?.sectionId || null;
-  const currentSubsectionId = question?.subsectionId || null;
+    // IDs of current question
+    const currentSectionId = question?.sectionId || null;
+    const currentSubsectionId = question?.subsectionId || null;
 
-  // IDs of previous question
-  const previousSectionId = previousQuestion?.sectionId || null;
-  const previousSubsectionId = previousQuestion?.subsectionId || null;
+    // IDs of previous question
+    const previousSectionId = previousQuestion?.sectionId || null;
+    const previousSubsectionId = previousQuestion?.subsectionId || null;
 
-  // Only show section if this is the first question
-  // or the section is different from the previous question
-  const showSection =
-    !!section &&
-    (index === 0 ||
-      String(currentSectionId) !== String(previousSectionId));
+    // Only show section if this is the first question
+    // or the section is different from the previous question
+    const showSection =
+      !!section &&
+      (index === 0 || String(currentSectionId) !== String(previousSectionId));
 
-  // Only show subsection when it changes
-  const showSubsection =
-    !!subsection &&
-    (index === 0 ||
-      String(currentSubsectionId) !== String(previousSubsectionId));
+    // Only show subsection when it changes
+    const showSubsection =
+      !!subsection &&
+      (index === 0 ||
+        String(currentSubsectionId) !== String(previousSubsectionId));
 
-  // Nothing changed, don't render anything
-  if (!showSection && !showSubsection) {
-    return null;
-  }
+    // Nothing changed, don't render anything
+    if (!showSection && !showSubsection) {
+      return null;
+    }
 
-  return (
-    <div className="mb-4 rounded border border-blue-200 bg-blue-50 px-4 py-3">
-      {/* SECTION */}
-      {showSection && (
-        <>
-          <div className="font-semibold text-blue-900">
-            {section.title || "Untitled section"}
-          </div>
-
-          {section.showNote && section.note && (
-            <div className="text-sm italic text-blue-800">
-              {section.note}
+    return (
+      <div className="mb-4 rounded border border-blue-200 bg-blue-50 px-4 py-3">
+        {/* SECTION */}
+        {showSection && (
+          <>
+            <div className="font-semibold text-blue-900">
+              {section.title || "Untitled section"}
             </div>
-          )}
-        </>
-      )}
 
-      {/* SUBSECTION */}
-      {showSubsection && (
-        <div className="mt-2 border-l-4 border-purple-400 pl-3 text-purple-900">
-          <div className="font-semibold">
-            {subsection.title || "Untitled subsection"}
-          </div>
+            {section.showNote && section.note && (
+              <div className="text-sm italic text-blue-800">{section.note}</div>
+            )}
+          </>
+        )}
 
-          {subsection.showNote && subsection.note && (
-            <div className="text-sm italic">
-              {subsection.note}
+        {/* SUBSECTION */}
+        {showSubsection && (
+          <div className="mt-2 border-l-4 border-purple-400 pl-3 text-purple-900">
+            <div className="font-semibold">
+              {subsection.title || "Untitled subsection"}
             </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-};
+
+            {subsection.showNote && subsection.note && (
+              <div className="text-sm italic">{subsection.note}</div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   const renderObjectivesBanner = () => {
     if (!survey?.objectives?.main && !survey?.sections?.length) return null;
@@ -507,7 +508,7 @@ const groupedQuestions = pageQuestions.reduce((groups, question) => {
         editableName: editableName.trim(),
         responses: structuredResponse,
         timestamp: serverTimestamp(),
-        anonymous: survey.anonymous,
+        anonymous: Boolean(survey.anonymous),
         userId: user?.uid || null,
       });
 
@@ -606,7 +607,7 @@ const groupedQuestions = pageQuestions.reduce((groups, question) => {
                   color: editableName ? (darkMode ? "#fff" : "#000") : "#888",
                 }}
               >
-                {editableName || "Click to enter your name"}
+                {editableName || "Enter your name / Name of the organization "}
               </span>
             )}
           </div>
@@ -669,40 +670,37 @@ const groupedQuestions = pageQuestions.reduce((groups, question) => {
         </div>
 
         <Form layout="vertical">
-          {Object.entries(groupedQuestions).map(
-  ([sectionId, group]) => (
-    <React.Fragment key={sectionId}>
+          {Object.entries(groupedQuestions).map(([sectionId, group]) => (
+            <React.Fragment key={sectionId}>
+              {/* SECTION HEADER - ONLY ONCE */}
+              {group.section && (
+                <div className="mb-4 rounded border border-blue-200 bg-blue-50 px-4 py-3">
+                  <div className="font-semibold text-blue-900">
+                    {group.section.title || "Untitled section"}
+                  </div>
 
-      {/* SECTION HEADER - ONLY ONCE */}
-      {group.section && (
-        <div className="mb-4 rounded border border-blue-200 bg-blue-50 px-4 py-3">
-          <div className="font-semibold text-blue-900">
-            {group.section.title || "Untitled section"}
-          </div>
+                  {group.section.showNote && group.section.note && (
+                    <div className="text-sm italic text-blue-800">
+                      {group.section.note}
+                    </div>
+                  )}
+                </div>
+              )}
 
-          {group.section.showNote && group.section.note && (
-            <div className="text-sm italic text-blue-800">
-              {group.section.note}
-            </div>
-          )}
-        </div>
-      )}
+              {/* ALL QUESTIONS BELONGING TO THIS SECTION */}
+              {group.questions.map((q, questionIndex) => {
+                const originalIndex = pageQuestions.indexOf(q);
 
-      {/* ALL QUESTIONS BELONGING TO THIS SECTION */}
-      {group.questions.map((q, questionIndex) => {
-        const originalIndex = pageQuestions.indexOf(q);
-
-        return (
-          <React.Fragment
-            key={`response-question-${q.id || originalIndex}`}
-          >
-            {renderQuestion(q, originalIndex)}
-          </React.Fragment>
-        );
-      })}
-    </React.Fragment>
-  )
-)}
+                return (
+                  <React.Fragment
+                    key={`response-question-${q.id || originalIndex}`}
+                  >
+                    {renderQuestion(q, originalIndex)}
+                  </React.Fragment>
+                );
+              })}
+            </React.Fragment>
+          ))}
 
           <Form.Item style={{ textAlign: "center", marginTop: 30 }}>
             <Button

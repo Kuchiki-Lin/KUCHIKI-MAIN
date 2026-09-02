@@ -7,9 +7,10 @@ import { useSurveyContext } from "@/app/survpages/survcont.jsx";
 import { useDarkMode } from "@/app/Modules/darkmodecont.js";
 
 import { ShieldCheck, User, EyeOff } from "lucide-react";
-import { Card, Form, Input, Button, Typography, Space, message } from "antd";
+import { Card, Form, Input, Button, Typography, Space } from "antd";
 import CountryStateSelector from "@/app/Modules/country";
 import TextArea from "antd/es/input/TextArea";
+import toast from "react-hot-toast";
 
 const { Title, Text } = Typography;
 
@@ -35,7 +36,10 @@ export default function SurvParameters() {
 
   const surveyVariables = (event) => {
     event.preventDefault();
-    if (!title) return message.error("Please enter a survey title");
+    if (!title) {
+      toast.error("Please enter a survey title");
+      return;
+    }
     router.push("/survpages/survey");
   };
   const addSpecificObjective = () => {

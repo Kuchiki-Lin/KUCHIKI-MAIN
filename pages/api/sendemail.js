@@ -1,7 +1,6 @@
 //API route for sending emails when a client requests for research
 
-import { Resend } from 'resend';
-const resend = new Resend(process.env.RESEND_API_KEY);
+import { resolveResend } from '@/lib/resendClient';
 
 export default async function handler(req, res) {
   console.log("📨 API hit: /api/sendemail");
@@ -10,6 +9,9 @@ export default async function handler(req, res) {
     console.log("❌ Invalid request method:", req.method);
     return res.status(405).end();
   }
+
+  const resend = resolveResend(res);
+  if (!resend) return;
 
   const { topic, description, urgency, contact, route , flexibleDetails} = req.body;
 

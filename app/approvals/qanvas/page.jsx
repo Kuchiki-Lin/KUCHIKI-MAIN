@@ -4,15 +4,11 @@
 import { useEffect, useState } from "react";
 import { collection, getDocs, updateDoc, doc, getDoc } from "firebase/firestore";
 import { db } from "@/app/firebaseConfig";
+import AdminRoute from "@/app/adminRoute";
 import toast from "react-hot-toast";
 
-const ADMIN_PASSWORD = process.env.NEXT_PUBLIC_SECRETO;
-
-export default function ApprovalDashboard() {
+function ApprovalDashboard() {
   const [surveys, setSurveys] = useState([]);
-const [authorized, setAuthorized] = useState(false);
-  const [passwordInput, setPasswordInput] = useState("");
-
 
   const fetchSurveys = async () => {
     const snapshot = await getDocs(collection(db, "productQuestions"));
@@ -59,45 +55,6 @@ const [authorized, setAuthorized] = useState(false);
   useEffect(() => {
     fetchSurveys();
   }, []);
- console.log(surveys)
-
-
- 
-   useEffect(() => {
-     if (authorized) {
-       fetchSurveys();
-     }
-   }, [authorized]);
- 
-   if (!authorized) {
-     return (
-       <div className="flex flex-col items-center justify-center h-screen bg-gray-100">
-         <div className="bg-white p-6 rounded shadow-md w-80">
-           <h2 className="text-lg font-semibold mb-4 text-center">Enter Admin Password</h2>
-           <input
-             type="password"
-             value={passwordInput}
-             onChange={(e) => setPasswordInput(e.target.value)}
-             className="w-full p-2 border rounded mb-4"
-             placeholder="Password"
-           />
-           <button
-             onClick={() => {
-               if (passwordInput === ADMIN_PASSWORD) {
-                 setAuthorized(true);
-               } else {
-                 toast.error("Incorrect password");
-               }
-             }}
-             className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700"
-           >
-             Access Dashboard
-           </button>
-         </div>
-       </div>
-     );
-   }
- 
 
  return (
   <div className="p-8">
@@ -135,3 +92,11 @@ const [authorized, setAuthorized] = useState(false);
 );
 
   }
+
+export default function ProductApprovalPage() {
+  return (
+    <AdminRoute>
+      <ApprovalDashboard />
+    </AdminRoute>
+  );
+}

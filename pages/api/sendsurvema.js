@@ -2,9 +2,7 @@
 //API route for sending a survey link to multiple emails
 
 
-import { Resend } from 'resend';
-
-const resend = new Resend(process.env.RESEND_API_KEY);
+import { resolveResend } from '@/lib/resendClient';
 
 export default async function handler(req, res) {
   console.log("📥 [API] /sendsurvema called");
@@ -13,6 +11,9 @@ export default async function handler(req, res) {
     console.warn("❌ Invalid method:", req.method);
     return res.status(405).json({ error: 'Method not allowed' });
   }
+
+  const resend = resolveResend(res);
+  if (!resend) return;
 
   const { emails, surveyLink, title } = req.body;
   console.log("📝 Payload received:", { emails, surveyLink, title });
